@@ -17,7 +17,7 @@ EPOCHS=500
 
 # 搜索空间
 SCOPES=("all")                        # "head" "all"
-POOLS=("cls" "mean_patch")            # "cls" "mean_patch"
+POOLS=("mean_patch")            # "cls" "mean_patch"
 FUSIONS=("concat" "sum" "gated-sum" "attn") # "gated-sum" "attn"
 LRS=(5e-5 1e-4 1e-3)
 # LRS=(5e-5 1e-4 1e-3)
@@ -32,6 +32,10 @@ for p in "${POOLS[@]}"; do
   for s in "${SCOPES[@]}"; do
     for lr in "${LRS[@]}"; do
       for fu in "${FUSIONS[@]}"; do
+      # 跳过已经跑完的组合：lr=5e-5 且 fusion in {concat, attn}
+        if [[ "$lr" == "5e-5" && ( "$fu" == "concat" || "$fu" == "attn" ) ]]; then
+          continue
+        fi
         JOBS+=("${p}|${s}|${lr}|${fu}")
       done
     done
