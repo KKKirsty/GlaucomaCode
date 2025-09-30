@@ -24,7 +24,9 @@ from matplotlib.colors import Normalize
 import math
 
 
-
+# === 反标准化（ImageNet） ===
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1)
+IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1)
 
 
 
@@ -83,9 +85,7 @@ def save_model(model, save_dir, epoch, mean_rmse, max_ckpts=3):
 #     plt.close()
 #     print(f"Saved {num_images} sample images to {save_path}")
 
-# === 反标准化（ImageNet） ===
-IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1)
-IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1)
+
 
 def denorm_img(t: torch.Tensor) -> torch.Tensor:
     """
@@ -135,16 +135,16 @@ def visualize_training_data(
       - "rnflt": 只画 RNFLT
       - "slab":  只画 SLAB（三通道）
       - "overlay": RNFLT 底图 + SLAB 热度叠加
-      - "triplet": 每个样本画三幅（RNFLT / SLAB / OVERLAY），注意 num_images 会被取到能整除3的数
+      - "triplet": 每个样本画2幅（RNFLT / SLAB），注意 num_images 会被取到能整除2的数
     """
     images_shown = 0
-    panels_per_sample = 3 if mode == "triplet" else 1
+    panels_per_sample = 2 if mode == "triplet" else 1
     num_panels = (num_images // panels_per_sample) * panels_per_sample
     if num_panels == 0:
         print("num_images 太小啦，至少 >= 1"); return
 
     # 自动布局
-    cols = 3
+    cols = 2
     rows = math.ceil(num_panels / cols)
 
     fig, axes = plt.subplots(rows, cols, figsize=(cols*3, rows*3))
@@ -202,15 +202,7 @@ def visualize_training_data(
                 else:
                     axes[ax_idx].imshow(chw_to_hwc(slab_b))
                 axes[ax_idx].set_title("SLAB"); axes[ax_idx].axis('off'); ax_idx += 1
-                # OVERLAY
-                if slab_b is None:
-                    axes[ax_idx].imshow(chw_to_hwc(img_b))
-                    axes[ax_idx].set_title("RNFLT (no slab)")
-                else:
-                    overlay = make_overlay(img_b, slab_b, alpha=0.45)
-                    axes[ax_idx].imshow(chw_to_hwc(overlay))
-                    axes[ax_idx].set_title("Overlay")
-                axes[ax_idx].axis('off'); ax_idx += 1; images_shown += 3
+                images_shown += 2
 
         if images_shown >= num_panels:
             break
@@ -234,26 +226,9 @@ class RMSELoss(nn.Module):
 
 
 
-# ======================== Transform ======================== #
-# def get_imagenet_transform(img_size):
-#     return Compose([
-#         ResizeD(keys=['image'], spatial_size=(img_size, img_size)),
-#         # 如果图像确实是 0~255 亮度，先缩放到 [0,1]
-#         ScaleIntensityRangeD(keys=['image'],
-#                              a_min=0.0, a_max=255.0,
-#                              b_min=0.0, b_max=1.0, clip=True),
-
-#         # 固定通道均值/方差（ImageNet）
-#         NormalizeIntensityd(
-#             keys=['image'],
-#             subtrahend=[0.485, 0.456, 0.406],
-#             divisor=[0.229, 0.224, 0.225],
-#             channel_wise=True
-#         ),
-
-#         ToTensord(keys=['image', 'label']),
-#     ])
-
+# ======================================================================================================================== #
+#                                                         Transform
+# ======================================================================================================================== #
 def get_imagenet_transform(img_size, with_slab=False):
     keys = ['image'] + (['slab'] if with_slab else [])
     return Compose([
@@ -279,6 +254,25 @@ def get_imagenet_transform(img_size, with_slab=False):
         ),
         ToTensord(keys=keys + ['label']),
     ])
+
+# def get_imagenet_transform(img_size):
+#     return Compose([
+#         ResizeD(keys=['image'], spatial_size=(img_size, img_size)),
+#         # 如果图像确实是 0~255 亮度，先缩放到 [0,1]
+#         ScaleIntensityRangeD(keys=['image'],
+#                              a_min=0.0, a_max=255.0,
+#                              b_min=0.0, b_max=1.0, clip=True),
+
+#         # 固定通道均值/方差（ImageNet）
+#         NormalizeIntensityd(
+#             keys=['image'],
+#             subtrahend=[0.485, 0.456, 0.406],
+#             divisor=[0.229, 0.224, 0.225],
+#             channel_wise=True
+#         ),
+
+#         ToTensord(keys=['image', 'label']),
+#     ])
 
 
 def get_vit_transform(img_size):
@@ -360,8 +354,11 @@ def get_albumentations_transform(img_size):
 
 
 
-# ======================== Infer ======================== #
-def evaluate_and_generate_predictions(model, weight_path, test_loader, device, all_test_id, all_test_lat, clamp = False):
+# ======================================================================================================================== #
+#                                                         Inference
+# ======================================================================================================================== #
+def evaluate_and_generate_predictions(model, weight_path, test_loader, device, 
+                                      all_test_id, all_test_lat, clamp = False):
 
     rmse_metric = RMSEMetric()
     mae_metric = MAEMetric()
@@ -400,7 +397,9 @@ def evaluate_and_generate_predictions(model, weight_path, test_loader, device, a
 
 
 
-# ======================== Visualization for SALSA ======================== #
+# ======================================================================================================================== #
+#                                                  Visualization for SALSA
+# ======================================================================================================================== #
 # ==== Helpers: list/pick ids ====
 def list_all_ids(hgf_dir: str) -> List[str]:
     p = Path(hgf_dir)
@@ -694,17 +693,6 @@ def visualize_after_training(
         except Exception:
             pass
 
-    # # 导出 targets（仅前 N 个）
-    # if export_targets and hgf_test_root is not None and ids_used:
-    #     try:
-    #         tar_df = build_tar_df_from_npz(hgf_test_root, ids_used, lat_fill='Unknown')
-    #         tar_xlsx = os.path.join(out_dir, tar_filename)
-    #         tar_df.to_excel(tar_xlsx, index=False)
-    #         print(f'[SAVE] targets -> {tar_xlsx}')
-    #     except Exception as e:
-    #         print(f"[WARN] export targets failed: {e}")
-
-    # Visualization:
     vmin, vmax = None, None 
 
     save_pngs = True
@@ -726,4 +714,272 @@ def visualize_after_training(
     print(f'[SAVE] figures -> {save_dir}')
 
 
+# ======================================================================================================================== #
+#                                          Visualization for SALSA (rnflt + slab)
+# ======================================================================================================================== #
+def _to_display_img(x, clip=True):
+    """
+    接受:
+      - torch.Tensor 或 np.ndarray
+      - 形状之一: (H,W), (3,H,W), (1,H,W), (1,3,H,W), (B,3,H,W)
+    返回:
+      - (H,W) 灰度 或 (H,W,3) 彩色 的 numpy 数组
+    规则:
+      - 若存在 batch 维, 且 batch>1, 默认取第 0 张; 若 batch==1, 去掉该维
+      - CHW -> HWC
+      - 可选 clip 到 [0,1]
+    """
+    import numpy as np
+    import torch
 
+    # 转 numpy
+    if torch.is_tensor(x):
+        x = x.detach().cpu()
+
+    # 处理通道/批次
+    if isinstance(x, torch.Tensor):
+        ndim = x.dim()
+        shape = tuple(x.shape)
+    else:
+        ndim = x.ndim
+        shape = x.shape
+
+    # 去 batch 维: (B, C, H, W) 或 (1, C, H, W)
+    if ndim == 4:
+        B, C, H, W = shape
+        x = x[0]  # 取第0张
+        ndim, shape = 3, x.shape
+
+    # 现在允许 (C,H,W) 或 (H,W) 或 (1,H,W)
+    if ndim == 3:
+        C, H, W = shape
+        # 若是 (1,H,W) -> 灰度
+        if C == 1:
+            x = x[0]  # (H,W)
+            ndim, shape = 2, x.shape
+        elif C == 3:
+            # CHW -> HWC
+            if isinstance(x, torch.Tensor):
+                x = x.permute(1, 2, 0)
+            else:
+                x = np.transpose(x, (1, 2, 0))
+        else:
+            raise ValueError(f"Unsupported channel count C={C}; expect 1 or 3, got shape={shape}")
+
+    # 转 numpy
+    if isinstance(x, torch.Tensor):
+        x = x.numpy()
+
+    # 保证数值范围
+    if clip:
+        x = np.clip(x, 0.0, 1.0)
+
+    return x  # (H,W) or (H,W,3)
+
+def _denorm_any_img(x: torch.Tensor) -> torch.Tensor:
+    """
+    接受形状:
+      - (H,W) 灰度
+      - (1,H,W), (3,H,W)
+      - (1,1,H,W), (1,3,H,W), (B,1,H,W), (B,3,H,W) -> 仅使用第0张
+    返回:
+      - torch.Tensor, 形状与输入去掉 batch 后一致; 范围 [0,1]
+    """
+    assert torch.is_tensor(x), "Expect torch.Tensor"
+    x = x.detach()
+
+    # 若有 batch 维, 取第0张
+    if x.dim() == 4:
+        x = x[0]
+
+    # x: (C,H,W) 或 (H,W)
+    if x.dim() == 2:
+        # 灰度无需用 ImageNet 统计量
+        return x.clamp(0, 1)
+
+    if x.dim() == 3:
+        C = x.shape[0]
+        if C == 1:
+            return x.clamp(0, 1)
+        elif C == 3:
+            return (x * IMAGENET_STD.to(x.device, x.dtype) + IMAGENET_MEAN.to(x.device, x.dtype)).clamp(0,1)
+        else:
+            raise RuntimeError(f"Unsupported channels: {C}")
+    raise RuntimeError(f"Unexpected shape: {tuple(x.shape)}")
+
+def _plot_quad(
+    rnflt_3chw: torch.Tensor,
+    slab_3chw: torch.Tensor,
+    gt_52: np.ndarray,
+    pred_52: np.ndarray,
+    layout=HARVARD_GF_52_LAYOUT,
+    save_path: Optional[str] = None,
+    titles=('RNFLT', 'SLAB', 'Ground truth', 'Prediction'),
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+):
+    # 反标准化 -> [0,1]
+    rnflt_show = _denorm_any_img(rnflt_3chw)
+    slab_show  = _denorm_any_img(slab_3chw)
+
+    # 确保 GT / Pred 一维向量
+    gt_52   = np.asarray(gt_52).reshape(-1)
+    pred_52 = np.asarray(pred_52).reshape(-1)
+    assert gt_52.size == 52 and pred_52.size == 52, "gt_52 & pred_52 must be length-52 vectors."
+
+    # 统一色标
+    if vmin is None: vmin = float(np.nanmin([gt_52.min(), pred_52.min()]))
+    if vmax is None: vmax = float(np.nanmax([gt_52.max(), pred_52.max()]))
+
+    fig, axes = plt.subplots(2, 2, figsize=(9, 7))
+    ax00, ax01, ax10, ax11 = axes.ravel()
+
+    # (1) RNFLT
+    ax00.set_title(titles[0]); ax00.axis('off')
+    ax00.imshow(_to_display_img(rnflt_show))
+
+    # (2) SLAB
+    ax01.set_title(titles[1]); ax01.axis('off')
+    ax01.imshow(_to_display_img(slab_show))
+
+    # (3) Ground truth (52)
+    ax10.set_title(titles[2])
+    _draw_vf(ax10, gt_52, layout, vmin=vmin, vmax=vmax)
+
+    # (4) Prediction (52)
+    ax11.set_title(titles[3])
+    _draw_vf(ax11, pred_52, layout, vmin=vmin, vmax=vmax)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+# ====== 主函数：双输入可视化 ======
+def visualize_after_training_dual(
+    val_loader,
+    model,
+    device,
+    out_dir,
+    weight_path: Optional[str] = None,    
+    pred_filename: str = "pred.xlsx",
+    tar_filename: str = "targets.xlsx",
+    num_classes: int = 52,
+    scale: float = 10.0,
+    visualize_n: int = 12,             
+    export_targets: bool = False,
+    hgf_test_root: Optional[str] = None,
+):
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    # 加载最佳权重
+    if weight_path:
+        ckpt = torch.load(weight_path, map_location='cpu')
+        state = ckpt.get('model_state', ckpt)
+        state = _strip_module_prefix(state)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print('[load] missing:', missing, '| unexpected:', unexpected)
+
+    model.eval(); model.to(device)
+    pred_rows, imgs_cache = [], []
+
+    # 准备 ID/lat
+    all_ids = getattr(val_loader.dataset, 'ids', None)
+    if all_ids is None:
+        all_ids = [f"sample_{i}" for i in range(len(val_loader.dataset))]
+    all_lat = ['Unknown'] * len(all_ids)
+
+    # 整体聚合，只统计前 N 个
+    try:
+        from monai.metrics import RMSEMetric, MAEMetric
+        rmse_metric = RMSEMetric(); mae_metric = MAEMetric()
+        use_monai = True
+    except Exception:
+        use_monai = False
+
+    processed = 0
+    idx = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            if processed >= visualize_n:
+                break  # 外层提前结束
+
+            x_r = batch['image'].to(device)       # RNFLT, (B,3,H,W)
+            x_s = batch['slab'].to(device)        # SLAB , (B,3,H,W)
+            y   = batch.get('label', None)
+
+            out_scaled = model(rnflt=x_r, slab=x_s)    # [B, 52]
+            out = out_scaled * scale                   # 还原尺度
+
+            out_np = out.detach().cpu().numpy()
+            B = out_np.shape[0]
+
+            for b in range(B):
+                if processed >= visualize_n:
+                    break  # 内层提前结束
+
+                sid = all_ids[idx] if idx < len(all_ids) else f"sample_{idx}"
+                row = {'test_id': sid, 'test_lat': all_lat[idx] if idx < len(all_lat) else 'Unknown'}
+
+                # 写入 52 维预测
+                for k in range(num_classes):
+                    row[f'pred_{k}'] = float(out_np[b, k])
+
+                # 逐样本 MAE/RMSE
+                if y is not None:
+                    gt_b = y[b].cpu().numpy()
+                    diff = out_np[b] - gt_b
+                    mae  = float(np.mean(np.abs(diff)))
+                    rmse = float(np.sqrt(np.mean(diff ** 2)))
+
+                    if use_monai:
+                        rmse_metric(out[b:b+1], y[b:b+1].to(device))  # 只累加这一张
+                        mae_metric(out[b:b+1],  y[b:b+1].to(device))
+                else:
+                    gt_b = np.full(num_classes, np.nan)
+                    mae = rmse = float('nan')
+
+                row['mae'] = mae
+                row['rmse'] = rmse
+                pred_rows.append(row)
+
+                # 打印 + 缓存（可视化数量与验证数量一致）
+                print(f"[VAL] id={sid}  MAE={mae:.4f}  RMSE={rmse:.4f}")
+                rnflt_img = batch['image'][b]  # (3,H,W)，标准化后
+                slab_img  = batch['slab'][b]   # (3,H,W)，标准化后
+                imgs_cache.append((sid, rnflt_img, slab_img, gt_b, out_np[b]))
+
+                processed += 1
+                idx += 1
+
+            # 如果这一批没用完的样本也要推进 idx：
+            while idx < len(all_ids) and idx < processed:
+                idx += 1
+
+    # 导出（只包含前 N 个样本）
+    pred_df = pd.DataFrame(pred_rows)
+    pred_xlsx = os.path.join(out_dir, pred_filename)
+    pred_df.to_excel(pred_xlsx, index=False)
+    print(f'[SAVE] predictions -> {pred_xlsx}')
+
+    # 整体平均（仅前 N 个）
+    if use_monai and processed > 0:
+        try:
+            overall_rmse = rmse_metric.aggregate().item()
+            overall_mae  = mae_metric.aggregate().item()
+            print(f"[VAL] (first {processed}) Overall RMSE: {overall_rmse:.4f}, Overall MAE: {overall_mae:.4f}")
+        except Exception:
+            pass
+
+    # 保存四联图
+    save_dir = os.path.join(out_dir, 'figs_quad')
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    for sid, rnflt_img, slab_img, gt, pred in imgs_cache:
+        save_path = os.path.join(save_dir, f'{sid}.png')
+        _plot_quad(rnflt_img, slab_img, gt, pred, save_path=save_path)
+
+    print(f'[SAVE] quad figures -> {save_dir}')

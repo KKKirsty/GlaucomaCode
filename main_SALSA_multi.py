@@ -6,15 +6,15 @@ from utils import get_vit_transform, get_cnn_transform, get_albumentations_trans
 from train import worker_salsa_multi
 
 def main():
-    parser = argparse.ArgumentParser(description='SALSA-derived RNFL & slab training with ViT')
+    parser = argparse.ArgumentParser(description='SALSA-derived RNFL+slab training with ViT')
     # model
-    parser.add_argument('--backbone', type=str, default='dinov3',
-                    choices=['dinov3'], help='Backbone: dinov3')
+    parser.add_argument('--backbone', type=str, default='dinov3', choices=['dinov3'], help='Backbone: dinov3')
     parser.add_argument('--dinov3_model', type=str,
                     default='/mnt/sda/sijiali/GlaucomaCode/pretrained_weight/dinov3-vitb16-pretrain-lvd1689m',
                     help='HuggingFace DINOv3 model name or path')
     parser.add_argument('--vit_pool', type=str, default='cls', choices=['cls', 'mean_patch'], help='ViT feature pooling method: cls or mean_patch')
     parser.add_argument('--train_scope', type=str, default='all', choices=['head', 'all'], help='Training scope: head or all')
+    parser.add_argument('--fusion', type=str, default='concat', choices=['concat', 'gated-sum', 'sum', 'attn'], help='Feature fusion method for dual-branch model')
     # dataset
     parser.add_argument('--data_root', type=str, default='/mnt/sda/sijiali/DataSet/harvardGF_unpacked',
                         help='SALSA images root. Subfolders like data_xxxx contain rnfl_thickness_map.jpg and optional slab_image.png')
@@ -49,7 +49,7 @@ def main():
 
     # 创建目录
     base_dir = f"./Results_SALSA_multi/{args.backbone}"
-    run_tag  = f"{args.backbone}_{args.transform}_{args.vit_pool}_{args.train_scope}_lr{args.lr}"
+    run_tag  = f"{args.backbone}_{args.transform}_{args.train_scope}_{args.vit_pool}_{args.fusion}_lr{args.lr}"
     run_root = os.path.join(base_dir, run_tag)
 
     args.save_dir = os.path.join(run_root, "ckpts")
@@ -60,6 +60,8 @@ def main():
         os.makedirs(args.log_dir, exist_ok=True)
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir, exist_ok=True)
+    if not os.path.exists(visual_dir):
+        os.makedirs(visual_dir, exist_ok=True)
 
     with open(os.path.join(run_root, "hparams.json"), "w", encoding="utf-8") as f:
         json.dump(vars(args), f, indent=2, ensure_ascii=False)
@@ -76,7 +78,7 @@ def main():
     elif args.transform == 'none':
         base_transform = None
     elif args.transform == 'imagenet':
-        base_transform = get_imagenet_transform(args.img_size)
+        base_transform = get_imagenet_transform(args.img_size, with_slab=(args.modality_type=='rnflt+slab'))
     else:
         raise ValueError(f'Unknown transform type: {args.transform}')
 
@@ -92,7 +94,7 @@ def main():
         train_batch=args.train_batch, valid_batch=args.valid_batch, num_workers=args.num_workers, patience=args.patience,
         modality_type=args.modality_type, 
         val_ratio=args.val_ratio, split_txt=args.split_txt, seed=args.seed,
-        backbone=args.backbone, dinov3_model=args.dinov3_model, vit_pool=args.vit_pool, train_scope=args.train_scope
+        backbone=args.backbone, dinov3_model=args.dinov3_model, vit_pool=args.vit_pool, train_scope=args.train_scope, fusion=args.fusion,
     )
 
 if __name__ == '__main__':
